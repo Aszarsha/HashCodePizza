@@ -333,15 +333,14 @@ int main( int argc, char * argv[] ) {
 	auto bases = DivideBase( initialBase, atoi( argv[2] ), atoi( argv[3] ) );
 	int numIter = 0;
 	for ( auto const & base: bases ) {
-		cout << "===== Iteration number: " << numIter << " / " << bases.size() << " ======" << endl;
+		cout << "===== Iteration number: " << ++numIter << " / " << bases.size() << " ======" << endl;
 		numNodesX = base.second.first;
 		numNodesY = base.second.second;
 		numNodes = numNodesX * numNodesY;
 		baseSet = &base.first;
 		Solve();
 		cout << "===== Cumulative score: " << sumScores << " ======" << endl;
-		cout << "===== Potential score: " << numIter/(double)(bases.size()) * sumScores << " ======" << endl;
-		++numIter;
+		cout << "===== Potential score: "  << bases.size()/(double)numIter * sumScores << " ======\n" << endl;
 	}
 
 	cout << "Total score: " << sumScores << endl;
