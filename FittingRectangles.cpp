@@ -1,10 +1,10 @@
 #define RUN_ME_WITH_SH /*
 g++ -Wall -std=c++1y -O3 -DIL_STD -DVERBOSE                            \
 	-o FittingRectangles FittingRectangles.cpp                          \
-	-I/opt/ibm/ILOG/CPLEX_Studio126/cplex/include/                      \
-	-I/opt/ibm/ILOG/CPLEX_Studio126/concert/include/                    \
-	-L/opt/ibm/ILOG/CPLEX_Studio126/cplex/lib/x86-64_linux/static_pic   \
-	-L/opt/ibm/ILOG/CPLEX_Studio126/concert/lib/x86-64_linux/static_pic \
+	-I/opt/ibm/ILOG/CPLEX_Studio1261/cplex/include/                      \
+	-I/opt/ibm/ILOG/CPLEX_Studio1261/concert/include/                    \
+	-L/opt/ibm/ILOG/CPLEX_Studio1261/cplex/lib/x86-64_linux/static_pic   \
+	-L/opt/ibm/ILOG/CPLEX_Studio1261/concert/lib/x86-64_linux/static_pic \
 	-lilocplex     \
 	-lcplex        \
 	-lcplexdistmip \
