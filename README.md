@@ -1,2 +1,2 @@
-# HashCodePizza
-MIP solver (using CPLEX) for the pizza subdivision problem Google's Hash Code 2015 Test Round
+# Maximum Independent Set of Rectangles solver
+MIP solver (using CPLEX) for the Maximum Independent Set of Rectangles problem
