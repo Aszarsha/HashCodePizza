@@ -1,5 +1,5 @@
 #define RUN_ME_WITH_SH /*
-g++ -Wall -std=c++14 -Ofast -DIL_STD -DVERBOSE -o ${0%.*} ${0}          \
+g++ -Wall -std=c++14 -g -DIL_STD -DVERBOSE -o ${0%.*} ${0}          \
 	-I/opt/ibm/ILOG/CPLEX_Studio1261/cplex/include                       \
 	-I/opt/ibm/ILOG/CPLEX_Studio1261/concert/include                     \
 	-L/opt/ibm/ILOG/CPLEX_Studio1261/cplex/lib/x86-64_linux/static_pic   \
@@ -25,7 +25,16 @@ using namespace std;
 int minNumCross = 3;
 int maxRectSize = 12;
 
-enum BlockType { REGULAR_TYPE, HAM_TYPE, DO_NOT_EXISTS_TYPE };
+enum BlockType { RegularBlock = 0
+               , HamBlock
+               , SelectedRegularBlock
+               , SelectedHamBlock
+               , DoNotExistsBlock
+};
+
+char const * blockStrings[] {
+	"-", "+", "x", "o", "#"
+};
 
 struct Base {
 	Base() {   }
@@ -33,30 +42,56 @@ struct Base {
 		: blocks{ move( b ) }, width{ w }, height{ h } {
 	}
 
+	void addBlock( BlockType type ) {
+		switch ( type ) {
+			case DoNotExistsBlock:     {   blocks.push_back( DoNotExistsBlock );       ++numDoNotExists;   break;   }
+			case SelectedRegularBlock: {   blocks.push_back( SelectedRegularBlock );   ++numRegular;       break;   }
+			case RegularBlock:         {   blocks.push_back( RegularBlock );           ++numRegular;       break;   }
+			case SelectedHamBlock:     {   blocks.push_back( SelectedHamBlock );       ++numHam;           break;   }
+			case HamBlock:             {   blocks.push_back( HamBlock );               ++numHam;           break;   }
+		}
+	}
+
 	vector< BlockType > blocks;
 	int width, height;
-	int numCross = 0;
-	int numBlank = 0;
+	int numRegular = 0;
+	int numHam     = 0;
 	int numDoNotExists = 0;
 
 	int size() const {   return (int)blocks.size();   }
-	int accessIndex( int i, int j ) const  {   return i + width*j;   }
-	BlockType access( int i, int j ) const {   return blocks[accessIndex(i, j)];   }
+	int index( int i, int j ) const  {   return i + width*j;   }
+	BlockType access( int i, int j ) const {   return blocks[index( i, j )];   }
 };
 
 Base LoadBaseFromFile( char const * fileName ) {
 	FILE * fin = fopen( fileName, "rb" );
-
 	Base base;
-	fscanf( fin, "%d %d %d %d\n", &base.height, &base.width, &minNumCross, &maxRectSize );
-	char rc;
-	for ( int i = 0; i < (base.width+1)*base.height; ++i ) {
-		fscanf( fin, "%c", &rc );
-		if      ( rc == '\n' ) continue;
-		else if ( rc == 'T'  ) {   base.blocks.push_back( REGULAR_TYPE       );   ++base.numBlank;         }
-		if      ( rc == 'H'  ) {   base.blocks.push_back( HAM_TYPE           );   ++base.numCross;         }
-		else if ( rc == '.'  ) {   base.blocks.push_back( DO_NOT_EXISTS_TYPE );   ++base.numDoNotExists;   }
+	if ( fscanf( fin, "%d %d %d %d\n", &base.height, &base.width, &minNumCross, &maxRectSize ) != 4 ) {
+			cerr << "Invalid first line in input file" << endl;
+			exit( 1 );
 	}
+	for ( int i = 0; i < (base.width+1)*base.height; ++i ) {
+		char rc;
+		if ( fscanf( fin, "%c", &rc ) != 1 ) {
+			cerr << "Missing characters in input file" << endl;
+			exit( 1 );
+		}
+		switch ( rc ) {
+			case '\n': {                                         continue;    }
+			case  '-': // fall through
+			case  'T': {   base.addBlock( RegularBlock         );   break;    }
+			case  '+': // fall through
+			case  'H': {   base.addBlock( HamBlock             );   break;    }
+			case  'x': {   base.addBlock( SelectedRegularBlock );   break;    }
+			case  'o': {   base.addBlock( SelectedHamBlock     );   break;    }
+			case  '#': {   base.addBlock( DoNotExistsBlock     );   break;    }
+			default:   {
+				cerr << "Unknown character: '" << rc << "' in input file" << endl;
+				exit( 1 );
+			}
+		}
+	}
+	fclose( fin );
 	return base;
 }
 
@@ -84,6 +119,7 @@ class SubProblem {
 					clog << "Infeasible, CPLEX status code: " << cplex.getStatus() << endl;
 				}
 			} else {
+				FillSolvedBase();
 				OutputSolution( cout );
 			}
 		}
@@ -97,6 +133,13 @@ class SubProblem {
 				out << i << ": " << constraints[i] << '\n';
 			}
 		}
+
+		int GetBlockVariableValue( int x, int y ) {
+			return cplex.getValue( blocksVars[base.index( x, y )] );
+		}
+
+		Base const & GetBase()       const {   return base;         }
+		Base const & GetSolvedBase() const {   return solvedBase;   }
 
 	private:
 		struct RectVarsType {
@@ -113,6 +156,7 @@ class SubProblem {
 		IloCplex cplex;
 
 		Base const & base;
+		Base solvedBase;
 
 		IloBoolVarArray        blocksVars;
 		vector< RectVarsType > rectsVarsArray;
@@ -128,32 +172,20 @@ class SubProblem {
 				blocksVars[i].setName( buf );
 
 				BlockType blockType = base.blocks[i];
-				if ( blockType == DO_NOT_EXISTS_TYPE ) {
+				if ( blockType == DoNotExistsBlock ) {
 					AddConstraint( model, blocksVars[i] == 0 );
 				}
 			}
 		}
 
 		void InitRectVariables() {
-		#if 1
 			for ( int i = 1; i <= maxRectSize; ++i ) {
 				for ( int j = 1; j <= maxRectSize; ++j ) {
 					if ( i*j <= maxRectSize ) {
-						rectsVarsArray.emplace_back(
-							AddRectangle( env, model, blocksVars, i, j ),
-							i, j
-						);
+						rectsVarsArray.emplace_back( AddRectangle( env, model, blocksVars, i, j ), i, j );
 					}
 				}
 			}
-		#else
-			varsArrays.push_back( ConstructVarsArrays( env, model, baseVars, 1 , 12 ) );
-			varsArrays.push_back( ConstructVarsArrays( env, model, baseVars, 12, 1  ) );
-			varsArrays.push_back( ConstructVarsArrays( env, model, baseVars, 2 , 6  ) );
-			varsArrays.push_back( ConstructVarsArrays( env, model, baseVars, 6 , 2  ) );
-			varsArrays.push_back( ConstructVarsArrays( env, model, baseVars, 3 , 4  ) );
-			varsArrays.push_back( ConstructVarsArrays( env, model, baseVars, 4 , 3  ) );
-		#endif
 		}
 
 		void InitOverlapConstraints() {
@@ -169,7 +201,7 @@ class SubProblem {
 						                                                          );
 					}
 					AddConstraint( model, overlapExpr <= 1 );
-					AddConstraint( model, blocksVars[base.accessIndex( i, j )] <= overlapExpr );
+					AddConstraint( model, blocksVars[base.index( i, j )] <= overlapExpr );
 				}
 			}
 		}
@@ -186,6 +218,34 @@ class SubProblem {
 			cplex.setParam( IloCplex::Param::Parallel, IloCplex::Opportunistic );
 			cplex.setParam( IloCplex::Param::Threads, cplex.getNumCores() );
 			cplex.setParam( IloCplex::Param::Emphasis::MIP, IloCplex::MIPEmphasisBestBound );
+		}
+
+		void FillSolvedBase() {
+			solvedBase.width  = base.width;
+			solvedBase.height = base.height;
+			for ( int i = 0; i < base.size(); ++i ) {
+				switch ( base.blocks[i] ) {
+					case DoNotExistsBlock: {
+						solvedBase.addBlock( DoNotExistsBlock );
+					} break;
+					case SelectedRegularBlock: // fall through
+					case RegularBlock: {
+						if ( cplex.getValue( blocksVars[i] ) == 0 ) {
+							solvedBase.addBlock( RegularBlock );
+						} else {
+							solvedBase.addBlock( SelectedRegularBlock );
+						}
+					} break;
+					case SelectedHamBlock: // fall through
+					case HamBlock: {
+						if ( cplex.getValue( blocksVars[i] ) == 0 ) {
+							solvedBase.addBlock( HamBlock );
+						} else {
+							solvedBase.addBlock( SelectedHamBlock );
+						}
+					} break;
+				}
+			}
 		}
 
 		void AddConstraint( IloModel & model, IloConstraint const & constraint ) {
@@ -232,8 +292,8 @@ class SubProblem {
 			for ( int i = 0; i < w; ++i ) {
 				for ( int j = 0; j < h; ++j ) {
 					BlockType blockType = base.access( x+i, y+j );
-					if      ( blockType == DO_NOT_EXISTS_TYPE ) {   return false;   }
-					else if ( blockType == HAM_TYPE           ) {   ++sum;          }
+					if      ( blockType == DoNotExistsBlock ) {   return false;   }
+					else if ( blockType == HamBlock         ) {   ++sum;          }
 				}
 			}
 			return sum >= minNumCross;
@@ -270,7 +330,7 @@ class SubProblem {
 			for ( int i = 0; i < w; ++i ) {
 				for ( int j = 0; j < h; ++j ) {
 					if ( x-i >= 0 && x-i < base.width-w+1 && y-j >= 0 && y-j < base.height-h+1 ) {
-						AddConstraint( model, blocksVars[base.accessIndex( x, y )] >= rects[x-i + (base.width-w+1)*(y-j)] );
+						AddConstraint( model, blocksVars[base.index( x, y )] >= rects[x-i + (base.width-w+1)*(y-j)] );
 						expr += rects[x-i + (base.width-w+1)*(y-j)];
 					}
 				}
@@ -279,62 +339,24 @@ class SubProblem {
 		}
 
 		void OutputSolution( ostream & o ) const {
-			auto UnselectedGetString = [&]( int i, int j ) {
-				BlockType blockType = base.access( i, j );
-				switch ( blockType ) {
-					case REGULAR_TYPE:       {   return "-";   }
-					case HAM_TYPE:           {   return "•";   }
-					case DO_NOT_EXISTS_TYPE: {   return " ";   }
-				}
-				return "ERROR";
-			};
-
-			auto SelectedGetString = [&]( int i, int j ) {
-				BlockType blockType = base.access( i, j );
-				switch ( blockType ) {
-					case REGULAR_TYPE:       {   return "x";   }
-					case HAM_TYPE:           {   return "o";   }
-					case DO_NOT_EXISTS_TYPE: {   return " ";   }
-				}
-				return "ERROR";
-			};
-
 			cout << "Input: \n";
-			PrintBase( [&]( int i, int j ) {
-				return UnselectedGetString( i, j );
-			});
+			PrintBase( base );
 			cout << "\nSolution: \n";
-			PrintBase( [&]( int i, int j ) {
-				if ( cplex.getValue( blocksVars[base.accessIndex( i, j )] ) == 0 ) {
-					return UnselectedGetString( i, j );
-				} else {
-					return SelectedGetString( i, j );
-				}
-			});
-
-			cout << "Best objective: " << GetBestScore() << endl;
+			PrintBase( solvedBase );
+			cout << "Score: " << GetBestScore() << endl;
 		}
 
-		template< typename GetElemenStringFunc >
-		void PrintBase( GetElemenStringFunc && getElemenString ) const {
+		void PrintBase( Base const & base ) const {
 			cout << '+';
-			for ( int i = 0; i < base.width; ++i ) {
-				cout << '=';
-			}
+			for ( int i = 0; i < base.width; ++i ) {   cout << '=';   }
 			cout << "+\n";
-		
 			for ( int j = 0; j < base.height; ++j ) {
 				cout << '|';
-				for ( int i = 0; i < base.width; ++i ) {
-					cout << getElemenString( i, j );
-				}
+				for ( int i = 0; i < base.width; ++i ) {   cout << blockStrings[base.access( i, j )];   }
 				cout << "|\n";
 			}
-		
 			cout << '+';
-			for ( int i = 0; i < base.width; ++i ) {
-				cout << '=';
-			}
+			for ( int i = 0; i < base.width; ++i ) {   cout << '=';   }
 			cout << "+\n";
 		}
 };
@@ -404,8 +426,6 @@ int main( int argc, char * argv[] ) {
 		cout << "===== Cumulative score: " << sumScores << " ======" << endl;
 		cout << "===== Potential score: "  << subProblems.size()/(double)numIter*sumScores << " ======\n" << endl;
 	}
-
-	cout << "Total score: " << sumScores << endl;
 	cout << "Total score w/ Do Not Exists: " << sumScores + initialBase.numDoNotExists << endl;
 
 	return 0;
